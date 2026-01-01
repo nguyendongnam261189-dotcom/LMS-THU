@@ -1,7 +1,6 @@
-
-import React from 'react';
-import { ChevronDown, Users } from 'lucide-react';
-import { ClassInfo } from '../types';
+import React, { useMemo, useState } from "react";
+import { ChevronDown, Users } from "lucide-react";
+import type { ClassInfo } from "../types";
 
 interface ClassSwitcherProps {
   classes: ClassInfo[];
@@ -9,38 +8,104 @@ interface ClassSwitcherProps {
   onSwitch: (id: string) => void;
 }
 
-const ClassSwitcher: React.FC<ClassSwitcherProps> = ({ classes, activeClassId, onSwitch }) => {
-  const activeClass = classes.find(c => c.id === activeClassId) || classes[0];
+const ClassSwitcher: React.FC<ClassSwitcherProps> = ({
+  classes,
+  activeClassId,
+  onSwitch,
+}) => {
+  const [open, setOpen] = useState(false);
+
+  const activeClass = useMemo(() => {
+    if (!classes || classes.length === 0) return undefined;
+    return classes.find((c) => c.id === activeClassId) || classes[0];
+  }, [classes, activeClassId]);
+
+  if (!classes || classes.length === 0) return null;
 
   return (
-    <div className="relative group px-4 py-2">
-      <button className="w-full flex items-center justify-between bg-white border border-slate-200 p-3 rounded-xl hover:border-blue-300 transition-all shadow-sm">
-        <div className="flex items-center gap-3 overflow-hidden">
-          <div className="bg-blue-100 p-2 rounded-lg text-blue-600">
-            <Users className="w-4 h-4" />
-          </div>
-          <div className="text-left overflow-hidden">
-            <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">Lớp đang chọn</p>
-            <p className="font-bold text-slate-900 truncate">{activeClass?.name}</p>
-          </div>
-        </div>
-        <ChevronDown className="w-4 h-4 text-slate-400" />
-      </button>
+    <div className="px-4">
+      <div className="relative">
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          className="w-full flex items-center justify-between gap-3 px-4 py-3 rounded-xl bg-white border border-slate-200 shadow-sm hover:bg-slate-50 transition"
+        >
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="w-9 h-9 rounded-lg bg-slate-100 flex items-center justify-center">
+              <Users className="w-5 h-5 text-slate-600" />
+            </div>
 
-      <div className="absolute top-full left-4 right-4 mt-2 bg-white border border-slate-200 rounded-xl shadow-xl hidden group-hover:block z-50 overflow-hidden">
-        {classes.map((c) => (
-          <button
-            key={c.id}
-            onClick={() => onSwitch(c.id)}
-            className={`w-full text-left px-4 py-3 hover:bg-slate-50 transition-colors text-sm font-semibold flex items-center justify-between ${
-              activeClassId === c.id ? 'text-blue-600 bg-blue-50' : 'text-slate-700'
+            <div className="min-w-0 text-left">
+              <p className="text-sm font-bold text-slate-900 truncate">
+                {activeClass?.name || "Chọn lớp"}
+              </p>
+              <p className="text-xs text-slate-500 truncate">
+                Mã lớp: {activeClass?.code || "---"}
+              </p>
+            </div>
+          </div>
+
+          <ChevronDown
+            className={`w-5 h-5 text-slate-500 transition ${
+              open ? "rotate-180" : ""
             }`}
-          >
-            {c.name}
-            {activeClassId === c.id && <div className="w-1.5 h-1.5 rounded-full bg-blue-600"></div>}
-          </button>
-        ))}
+          />
+        </button>
+
+        {open && (
+          <div className="absolute z-20 mt-2 w-full bg-white border border-slate-200 rounded-xl shadow-lg overflow-hidden">
+            <div className="max-h-64 overflow-auto">
+              {classes.map((c) => {
+                const isActive = c.id === (activeClass?.id ?? "");
+                return (
+                  <button
+                    key={c.id}
+                    type="button"
+                    onClick={() => {
+                      onSwitch(c.id);
+                      setOpen(false);
+                    }}
+                    className={`w-full text-left px-4 py-3 flex items-center justify-between gap-3 hover:bg-slate-50 transition ${
+                      isActive ? "bg-slate-50" : ""
+                    }`}
+                  >
+                    <div className="min-w-0">
+                      <p
+                        className={`text-sm font-semibold truncate ${
+                          isActive ? "text-slate-900" : "text-slate-800"
+                        }`}
+                      >
+                        {c.name}
+                      </p>
+                      <p className="text-xs text-slate-500 truncate">
+                        Mã lớp: {c.code}
+                        {typeof c.student_count === "number"
+                          ? ` • ${c.student_count} HS`
+                          : ""}
+                      </p>
+                    </div>
+                    {isActive && (
+                      <span className="text-xs font-bold text-blue-600">
+                        Đang chọn
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
       </div>
+
+      {/* Click ra ngoài để đóng (đơn giản) */}
+      {open && (
+        <button
+          type="button"
+          aria-label="close"
+          className="fixed inset-0 z-10 cursor-default"
+          onClick={() => setOpen(false)}
+        />
+      )}
     </div>
   );
 };
