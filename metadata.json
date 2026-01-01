@@ -1,0 +1,7 @@
+{
+  "name": "ClassLingo LMS",
+  "description": "Hệ thống quản lý học tập tiếng Anh đa lớp với bảng tin mạng xã hội, công cụ soạn bài thông minh và theo dõi tiến độ cho phụ huynh.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
