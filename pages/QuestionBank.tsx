@@ -1,9 +1,8 @@
-
 import React, { useState, useEffect } from 'react';
 import { User, QuestionBankItem, Difficulty, QuestionType } from '../types';
 import { fetchFromAPI, postToAPI } from '../services/api';
-import { 
-  Database, Search, Trash2, Plus, X, ArrowRightLeft, 
+import {
+  Database, Search, Trash2, Plus, X, ArrowRightLeft,
   Tags, Filter, BarChart3, Loader2, PlusCircle, Save,
   CheckCircle, HelpCircle, Edit2
 } from 'lucide-react';
@@ -33,15 +32,48 @@ const QuestionBank: React.FC<{ user: User }> = ({ user }) => {
 
   useEffect(() => { loadBank(); }, []);
 
+  // ✅ Supabase thường trả jsonb đúng dạng array/object,
+  // nhưng đôi khi dữ liệu có thể là string JSON (do legacy).
+  const normalizeOptionsJson = (raw: any) => {
+    if (!raw) return null;
+    if (Array.isArray(raw)) return raw;
+
+    if (typeof raw === 'string') {
+      const s = raw.trim();
+      if (!s) return null;
+      try {
+        const parsed = JSON.parse(s);
+        return parsed;
+      } catch {
+        return null;
+      }
+    }
+
+    // object dạng { ... } thì coi như 1 item
+    if (typeof raw === 'object') return raw;
+
+    return null;
+  };
+
   const loadBank = async () => {
     setLoading(true);
     try {
       const data = await fetchFromAPI<QuestionBankItem[]>('getQuestionBank', { teacher_id: user.id });
-      setQuestions(Array.isArray(data) ? data : []);
-    } catch (e) { 
+      const safe = Array.isArray(data) ? data : [];
+
+      // normalize options_json để UI không crash
+      const normalized = safe.map((q) => ({
+        ...q,
+        options_json: normalizeOptionsJson((q as any).options_json)
+      })) as any;
+
+      setQuestions(normalized);
+    } catch (e) {
       console.error(e);
       setQuestions([]);
-    } finally { setLoading(false); }
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleDelete = async (id: string) => {
@@ -49,7 +81,9 @@ const QuestionBank: React.FC<{ user: User }> = ({ user }) => {
     try {
       await postToAPI('deleteQuestion', { id });
       setQuestions(prev => prev.filter(q => q.id !== id));
-    } catch (e) { alert("Lỗi khi xóa"); }
+    } catch (e) {
+      alert("Lỗi khi xóa");
+    }
   };
 
   const handleOpenCreate = () => {
@@ -69,64 +103,76 @@ const QuestionBank: React.FC<{ user: User }> = ({ user }) => {
 
   const handleOpenEdit = (q: QuestionBankItem) => {
     setEditingId(q.id);
-    
-    // Parse options_json logic
+
+    const rawOptions = normalizeOptionsJson((q as any).options_json);
+
     let opts = ['', '', '', ''];
     let pairs = [{ left: '', right: '' }];
-    
+
     if (q.type === 'multiple_choice' || q.type === 'true_false') {
-      if (Array.isArray(q.options_json)) {
-        q.options_json.forEach((val, i) => { if(i < 4) opts[i] = val; });
+      if (Array.isArray(rawOptions)) {
+        rawOptions.forEach((val, i) => { if (i < 4) opts[i] = String(val ?? ''); });
       }
     } else if (q.type === 'matching') {
-      if (Array.isArray(q.options_json)) pairs = q.options_json;
+      if (Array.isArray(rawOptions)) {
+        pairs = rawOptions
+          .filter((p: any) => p && typeof p === 'object')
+          .map((p: any) => ({ left: String(p.left ?? ''), right: String(p.right ?? '') }));
+        if (pairs.length === 0) pairs = [{ left: '', right: '' }];
+      }
     }
 
     setFormQ({
-      text: q.text,
-      type: q.type as QuestionType,
-      difficulty: q.difficulty as Difficulty,
-      category: q.category || '',
-      correct_answer: q.correct_answer || '',
-      explanation: q.explanation || '',
+      text: String((q as any).text ?? ''),
+      type: (q.type as QuestionType) || 'multiple_choice',
+      difficulty: ((q as any).difficulty as Difficulty) || 'Medium',
+      category: String((q as any).category ?? ''),
+      correct_answer: String((q as any).correct_answer ?? ''),
+      explanation: String((q as any).explanation ?? ''),
       options: opts,
       matchingPairs: pairs
     });
+
     setIsModalOpen(true);
   };
 
   const handleSaveQuestion = async (e: React.FormEvent) => {
     e.preventDefault();
-    
+
     if (!formQ.text.trim()) return alert("Vui lòng nhập nội dung câu hỏi.");
     if (!formQ.category.trim()) return alert("Vui lòng nhập chủ đề.");
 
     setIsSaving(true);
     try {
-      let options_json: any = [];
+      let options_json: any = null;
+
       if (formQ.type === 'multiple_choice') {
-        options_json = formQ.options.filter(o => o.trim() !== '');
+        options_json = formQ.options.map(o => String(o ?? '').trim()).filter(o => o !== '');
       } else if (formQ.type === 'matching') {
-        options_json = formQ.matchingPairs.filter(p => p.left.trim() && p.right.trim());
+        options_json = formQ.matchingPairs
+          .map(p => ({ left: String(p.left ?? '').trim(), right: String(p.right ?? '').trim() }))
+          .filter(p => p.left && p.right);
       } else if (formQ.type === 'true_false') {
         options_json = ['True', 'False'];
+      } else {
+        options_json = null;
       }
 
-      const payload = {
+      const payload: any = {
         id: editingId,
         text: formQ.text.trim(),
         type: formQ.type,
         difficulty: formQ.difficulty,
         category: formQ.category.trim(),
-        correct_answer: String(formQ.correct_answer).trim(),
-        explanation: formQ.explanation.trim(),
-        options_json: options_json,
+        correct_answer: String(formQ.correct_answer ?? '').trim(),
+        explanation: String(formQ.explanation ?? '').trim(),
+        options_json,
         teacher_id: user.id
       };
 
       const action = editingId ? 'updateQuestion' : 'createBankQuestion';
       await postToAPI(action, payload);
-      
+
       alert(editingId ? "Đã cập nhật câu hỏi!" : "Đã lưu câu hỏi thành công!");
       setIsModalOpen(false);
       loadBank();
@@ -138,16 +184,16 @@ const QuestionBank: React.FC<{ user: User }> = ({ user }) => {
     }
   };
 
-  const topics = ['All', ...new Set(questions.map(q => q.category).filter(Boolean))];
+  const topics = ['All', ...new Set(questions.map((q: any) => q.category).filter(Boolean))];
 
-  const filtered = questions.filter(q => {
-    const rawText = q?.text || "";
-    const safeText = String(rawText).toLowerCase();
-    const safeSearch = (searchTerm || "").toLowerCase();
-    
+  const filtered = questions.filter((q: any) => {
+    const safeText = String(q?.text ?? "").toLowerCase();
+    const safeSearch = String(searchTerm ?? "").toLowerCase();
+
     const matchesSearch = safeText.includes(safeSearch);
     const matchesDifficulty = filterDifficulty === 'All' || q.difficulty === filterDifficulty;
     const matchesTopic = filterTopic === 'All' || q.category === filterTopic;
+
     return matchesSearch && matchesDifficulty && matchesTopic;
   });
 
@@ -165,7 +211,7 @@ const QuestionBank: React.FC<{ user: User }> = ({ user }) => {
           <h2 className="text-3xl font-black text-slate-900 tracking-tight">Ngân hàng đề thông minh</h2>
           <p className="text-sm font-bold text-slate-400 uppercase tracking-widest mt-1">Kho tài liệu đã phân loại AI</p>
         </div>
-        <button 
+        <button
           onClick={handleOpenCreate}
           className="bg-slate-900 text-white px-8 py-4 rounded-[1.5rem] font-black shadow-2xl flex items-center gap-2 hover:bg-blue-600 transition-all active:scale-95"
         >
@@ -176,20 +222,20 @@ const QuestionBank: React.FC<{ user: User }> = ({ user }) => {
       <div className="bg-white p-6 rounded-[2rem] shadow-sm border border-slate-200 space-y-6">
         <div className="relative">
           <Search className="absolute left-5 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
-          <input 
-            className="w-full pl-14 pr-6 py-4 bg-slate-50 border border-slate-100 rounded-2xl font-semibold outline-none focus:bg-white focus:ring-4 focus:ring-blue-50 transition-all" 
-            placeholder="Tìm theo nội dung câu hỏi..." 
-            value={searchTerm} 
-            onChange={e => setSearchTerm(e.target.value)} 
+          <input
+            className="w-full pl-14 pr-6 py-4 bg-slate-50 border border-slate-100 rounded-2xl font-semibold outline-none focus:bg-white focus:ring-4 focus:ring-blue-50 transition-all"
+            placeholder="Tìm theo nội dung câu hỏi..."
+            value={searchTerm}
+            onChange={e => setSearchTerm(e.target.value)}
           />
         </div>
 
         <div className="flex flex-wrap gap-4 items-center text-sm font-bold">
           <div className="flex items-center gap-2 text-slate-400 uppercase text-[10px] tracking-widest mr-2">
-            <Filter className="w-4 h-4"/> Bộ lọc:
+            <Filter className="w-4 h-4" /> Bộ lọc:
           </div>
-          
-          <select 
+
+          <select
             className="px-4 py-2 bg-slate-50 border border-slate-100 rounded-xl outline-none font-bold"
             value={filterDifficulty}
             onChange={e => setFilterDifficulty(e.target.value as any)}
@@ -200,7 +246,7 @@ const QuestionBank: React.FC<{ user: User }> = ({ user }) => {
             <option value="Hard">Khó (Hard)</option>
           </select>
 
-          <select 
+          <select
             className="px-4 py-2 bg-slate-50 border border-slate-100 rounded-xl outline-none font-bold"
             value={filterTopic}
             onChange={e => setFilterTopic(e.target.value)}
@@ -214,7 +260,7 @@ const QuestionBank: React.FC<{ user: User }> = ({ user }) => {
         <div className="py-20 text-center animate-pulse font-bold text-slate-400">Đang đồng bộ kho dữ liệu...</div>
       ) : (
         <div className="grid gap-6">
-          {filtered.map((q) => (
+          {filtered.map((q: any) => (
             <div key={q.id} className="bg-white p-8 rounded-[2.5rem] border border-slate-200 shadow-sm hover:border-blue-300 transition-all group">
               <div className="flex justify-between items-start mb-6">
                 <div className="flex flex-wrap gap-2">
@@ -222,37 +268,54 @@ const QuestionBank: React.FC<{ user: User }> = ({ user }) => {
                     {q.difficulty || 'Medium'}
                   </span>
                   <span className="px-3 py-1 bg-purple-50 text-purple-600 border border-purple-100 rounded-lg text-[10px] font-black uppercase flex items-center gap-1">
-                    <Tags className="w-3 h-3"/> {q.category || 'General'}
+                    <Tags className="w-3 h-3" /> {q.category || 'General'}
                   </span>
                   <span className="px-3 py-1 bg-slate-50 text-slate-400 border border-slate-100 rounded-lg text-[10px] font-black uppercase">
                     {q.type || 'multiple_choice'}
                   </span>
                 </div>
                 <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-all">
-                  <button onClick={() => handleOpenEdit(q)} className="p-2 text-slate-300 hover:text-blue-600 rounded-xl hover:bg-blue-50 transition-all"><Edit2 className="w-5 h-5" /></button>
-                  <button onClick={() => handleDelete(q.id)} className="p-2 text-slate-300 hover:text-red-500 rounded-xl hover:bg-red-50 transition-all"><Trash2 className="w-5 h-5" /></button>
+                  <button onClick={() => handleOpenEdit(q)} className="p-2 text-slate-300 hover:text-blue-600 rounded-xl hover:bg-blue-50 transition-all">
+                    <Edit2 className="w-5 h-5" />
+                  </button>
+                  <button onClick={() => handleDelete(q.id)} className="p-2 text-slate-300 hover:text-red-500 rounded-xl hover:bg-red-50 transition-all">
+                    <Trash2 className="w-5 h-5" />
+                  </button>
                 </div>
               </div>
 
               <p className="text-xl font-bold text-slate-800 mb-6 leading-relaxed">{q.text}</p>
 
-              {(q.type === 'multiple_choice' || !q.type || q.type === 'true_false') && q.options_json && Array.isArray(q.options_json) && (
+              {(q.type === 'multiple_choice' || !q.type || q.type === 'true_false') && Array.isArray(q.options_json) && (
                 <div className="grid md:grid-cols-2 gap-3">
                   {q.options_json.map((opt: string, i: number) => (
-                    <div key={i} className={`p-4 rounded-2xl border font-bold text-sm ${opt === q.correct_answer ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-slate-50 border-slate-100 text-slate-600'}`}>
-                      <span className="text-slate-300 mr-2">{q.type === 'true_false' ? (opt === 'True' ? '✓' : '✗') : String.fromCharCode(65 + i)}.</span> {opt}
+                    <div
+                      key={i}
+                      className={`p-4 rounded-2xl border font-bold text-sm ${String(opt) === String(q.correct_answer)
+                        ? 'bg-emerald-50 border-emerald-200 text-emerald-700'
+                        : 'bg-slate-50 border-slate-100 text-slate-600'
+                        }`}
+                    >
+                      <span className="text-slate-300 mr-2">
+                        {q.type === 'true_false' ? (opt === 'True' ? '✓' : '✗') : String.fromCharCode(65 + i)}.
+                      </span>
+                      {opt}
                     </div>
                   ))}
                 </div>
               )}
 
-              {q.type === 'matching' && q.options_json && Array.isArray(q.options_json) && (
+              {q.type === 'matching' && Array.isArray(q.options_json) && (
                 <div className="space-y-3 bg-slate-50 p-6 rounded-3xl border border-slate-100">
                   {q.options_json.map((pair: any, i: number) => (
                     <div key={i} className="flex items-center gap-4">
-                      <div className="flex-1 p-3 bg-white rounded-xl border border-slate-200 font-bold text-slate-700 text-sm shadow-sm">{pair.left}</div>
+                      <div className="flex-1 p-3 bg-white rounded-xl border border-slate-200 font-bold text-slate-700 text-sm shadow-sm">
+                        {pair?.left}
+                      </div>
                       <ArrowRightLeft className="w-4 h-4 text-blue-400" />
-                      <div className="flex-1 p-3 bg-blue-600 text-white rounded-xl font-bold text-sm shadow-md">{pair.right}</div>
+                      <div className="flex-1 p-3 bg-blue-600 text-white rounded-xl font-bold text-sm shadow-md">
+                        {pair?.right}
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -269,6 +332,7 @@ const QuestionBank: React.FC<{ user: User }> = ({ user }) => {
               )}
             </div>
           ))}
+
           {filtered.length === 0 && (
             <div className="py-20 text-center bg-slate-100 rounded-[3rem] border-2 border-dashed border-slate-200">
               <Database className="w-16 h-16 text-slate-300 mx-auto mb-4" />
@@ -321,7 +385,7 @@ const QuestionBank: React.FC<{ user: User }> = ({ user }) => {
                   <div className="space-y-3">
                     <label className="text-xs font-black text-slate-400 uppercase tracking-[0.2em] ml-2">Phân loại AI</label>
                     <div className="grid grid-cols-2 gap-4">
-                      <select 
+                      <select
                         className="p-4 bg-slate-50 border border-slate-100 rounded-2xl font-bold text-sm outline-none focus:ring-4 focus:ring-blue-50"
                         value={formQ.difficulty}
                         onChange={e => setFormQ({ ...formQ, difficulty: e.target.value as any })}
@@ -330,7 +394,7 @@ const QuestionBank: React.FC<{ user: User }> = ({ user }) => {
                         <option value="Medium">Trung bình</option>
                         <option value="Hard">Khó (Hard)</option>
                       </select>
-                      <input 
+                      <input
                         className="p-4 bg-slate-50 border border-slate-100 rounded-2xl font-bold text-sm outline-none focus:ring-4 focus:ring-blue-50"
                         placeholder="Chủ đề (VD: Tenses)"
                         value={formQ.category}
@@ -343,7 +407,7 @@ const QuestionBank: React.FC<{ user: User }> = ({ user }) => {
 
                 <div className="space-y-4">
                   <label className="text-xs font-black text-slate-400 uppercase tracking-[0.2em] ml-2">Nội dung câu hỏi</label>
-                  <textarea 
+                  <textarea
                     className="w-full p-8 bg-slate-50 border border-slate-100 rounded-[2rem] font-bold text-xl outline-none focus:bg-white focus:ring-4 focus:ring-blue-50 min-h-[150px] transition-all"
                     placeholder="Nhập nội dung câu hỏi tiếng Anh tại đây..."
                     value={formQ.text}
@@ -359,10 +423,10 @@ const QuestionBank: React.FC<{ user: User }> = ({ user }) => {
                       {formQ.options.map((opt, i) => (
                         <div key={i} className="relative group">
                           <span className="absolute left-6 top-1/2 -translate-y-1/2 font-black text-slate-300 group-focus-within:text-blue-500 transition-colors">{String.fromCharCode(65 + i)}.</span>
-                          <input 
+                          <input
                             className="w-full pl-14 pr-6 py-5 bg-slate-50 border border-slate-100 rounded-2xl font-bold outline-none focus:bg-white focus:ring-4 focus:ring-blue-50 transition-all"
                             value={opt}
-                            placeholder={`Phương án ${String.fromCharCode(65+i)}`}
+                            placeholder={`Phương án ${String.fromCharCode(65 + i)}`}
                             onChange={e => {
                               const opts = [...formQ.options];
                               opts[i] = e.target.value;
@@ -374,16 +438,16 @@ const QuestionBank: React.FC<{ user: User }> = ({ user }) => {
                     </div>
                     <div className="p-6 bg-emerald-50 rounded-2xl border border-emerald-100 space-y-3">
                       <label className="text-[10px] font-black text-emerald-600 uppercase tracking-widest flex items-center gap-2">
-                        <CheckCircle className="w-4 h-4"/> Đáp án đúng
+                        <CheckCircle className="w-4 h-4" /> Đáp án đúng
                       </label>
-                      <select 
+                      <select
                         className="w-full p-3 bg-white border border-emerald-200 rounded-xl font-black text-emerald-800 outline-none"
                         value={formQ.correct_answer}
                         onChange={e => setFormQ({ ...formQ, correct_answer: e.target.value })}
                       >
                         <option value="">Chọn một phương án...</option>
                         {formQ.options.map((opt, i) => opt.trim() && (
-                          <option key={i} value={opt}>{String.fromCharCode(65+i)}. {opt}</option>
+                          <option key={i} value={opt}>{String.fromCharCode(65 + i)}. {opt}</option>
                         ))}
                       </select>
                     </div>
@@ -393,7 +457,7 @@ const QuestionBank: React.FC<{ user: User }> = ({ user }) => {
                 {formQ.type === 'true_false' && (
                   <div className="p-8 bg-blue-50 rounded-[2.5rem] border border-blue-100 space-y-6">
                     <label className="text-xs font-black text-blue-600 uppercase tracking-widest flex items-center gap-2">
-                       <HelpCircle className="w-5 h-5" /> Chọn đáp án đúng
+                      <HelpCircle className="w-5 h-5" /> Chọn đáp án đúng
                     </label>
                     <div className="flex gap-4">
                       {['True', 'False'].map(val => (
@@ -416,7 +480,7 @@ const QuestionBank: React.FC<{ user: User }> = ({ user }) => {
                     <div className="space-y-3">
                       {formQ.matchingPairs.map((pair, i) => (
                         <div key={i} className="flex gap-4 items-center animate-in slide-in-from-left duration-300">
-                          <input 
+                          <input
                             className="flex-1 p-4 bg-slate-50 border border-slate-100 rounded-xl font-bold outline-none focus:bg-white transition-all"
                             placeholder="Vế trái (VD: Apple)"
                             value={pair.left}
@@ -427,7 +491,7 @@ const QuestionBank: React.FC<{ user: User }> = ({ user }) => {
                             }}
                           />
                           <ArrowRightLeft className="w-5 h-5 text-slate-300" />
-                          <input 
+                          <input
                             className="flex-1 p-4 bg-blue-50 border border-blue-100 rounded-xl font-bold outline-none focus:bg-blue-100/50 transition-all"
                             placeholder="Vế phải (VD: Quả táo)"
                             value={pair.right}
@@ -437,8 +501,8 @@ const QuestionBank: React.FC<{ user: User }> = ({ user }) => {
                               setFormQ({ ...formQ, matchingPairs: pairs });
                             }}
                           />
-                          <button 
-                            type="button" 
+                          <button
+                            type="button"
                             onClick={() => setFormQ({ ...formQ, matchingPairs: formQ.matchingPairs.filter((_, idx) => idx !== i) })}
                             className="p-3 text-rose-300 hover:text-rose-500 hover:bg-rose-50 rounded-xl transition-all"
                           >
@@ -447,8 +511,8 @@ const QuestionBank: React.FC<{ user: User }> = ({ user }) => {
                         </div>
                       ))}
                     </div>
-                    <button 
-                      type="button" 
+                    <button
+                      type="button"
                       onClick={() => setFormQ({ ...formQ, matchingPairs: [...formQ.matchingPairs, { left: '', right: '' }] })}
                       className="w-full py-4 border-2 border-dashed border-slate-200 rounded-2xl text-slate-400 font-bold hover:border-blue-400 hover:text-blue-600 transition-all flex items-center justify-center gap-2"
                     >
@@ -460,9 +524,9 @@ const QuestionBank: React.FC<{ user: User }> = ({ user }) => {
                 {formQ.type === 'fill_blank' && (
                   <div className="p-8 bg-blue-50 rounded-[2.5rem] border border-blue-100 space-y-4">
                     <label className="text-xs font-black text-blue-600 uppercase tracking-widest flex items-center gap-2">
-                       <BarChart3 className="w-5 h-5" /> Đáp án điền vào chỗ trống
+                      <BarChart3 className="w-5 h-5" /> Đáp án điền vào chỗ trống
                     </label>
-                    <input 
+                    <input
                       className="w-full p-6 bg-white border border-blue-200 rounded-2xl font-black text-2xl text-blue-800 outline-none focus:ring-4 focus:ring-blue-100"
                       placeholder="VD: has been"
                       value={formQ.correct_answer}
